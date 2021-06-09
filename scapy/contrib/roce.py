@@ -11,8 +11,8 @@ RoCE: RDMA over Converged Ethernet
 """
 
 from scapy.packet import Packet, bind_layers, Raw
-from scapy.fields import ByteEnumField, ByteField, XByteField, \
-    ShortField, XShortField, XLongField, BitField, XBitField, FCSField
+from scapy.fields import ByteEnumField, ByteField, XByteField, X3BytesField, \
+    ShortField, XShortField, XIntField, XLongField, BitField, XBitField, FCSField
 from scapy.layers.inet import IP, UDP
 from scapy.layers.l2 import Ether
 from scapy.compat import raw
@@ -26,6 +26,7 @@ _transports = {
     'UC': 0x20,
     'RD': 0x40,
     'UD': 0x60,
+    'XRC': 0xa0,
 }
 
 _ops = {
@@ -50,6 +51,9 @@ _ops = {
     'ATOMIC_ACKNOWLEDGE': 0x12,
     'COMPARE_SWAP': 0x13,
     'FETCH_ADD': 0x14,
+    'RESERVED': 0x15,
+    'SEND_LAST_WITH_INVALIDATE': 0x16,
+    'SEND_ONLY_WITH_INVALIDATE': 0x17,
 }
 
 
@@ -61,7 +65,7 @@ def opcode(transport, op):
     return (_transports[transport] + _ops[op], '{}_{}'.format(transport, op))
 
 
-_bth_opcodes = dict([
+_bth_opcodes_RC = dict([
     opcode('RC', 'SEND_FIRST'),
     opcode('RC', 'SEND_MIDDLE'),
     opcode('RC', 'SEND_LAST'),
@@ -83,7 +87,11 @@ _bth_opcodes = dict([
     opcode('RC', 'ATOMIC_ACKNOWLEDGE'),
     opcode('RC', 'COMPARE_SWAP'),
     opcode('RC', 'FETCH_ADD'),
+    opcode('RC', 'SEND_LAST_WITH_INVALIDATE'),
+    opcode('RC', 'SEND_ONLY_WITH_INVALIDATE'),
+])
 
+_bth_opcodes_UC = dict([
     opcode('UC', 'SEND_FIRST'),
     opcode('UC', 'SEND_MIDDLE'),
     opcode('UC', 'SEND_LAST'),
@@ -96,7 +104,9 @@ _bth_opcodes = dict([
     opcode('UC', 'RDMA_WRITE_LAST_WITH_IMMEDIATE'),
     opcode('UC', 'RDMA_WRITE_ONLY'),
     opcode('UC', 'RDMA_WRITE_ONLY_WITH_IMMEDIATE'),
+])
 
+_bth_opcodes_RD = dict([
     opcode('RD', 'SEND_FIRST'),
     opcode('RD', 'SEND_MIDDLE'),
     opcode('RD', 'SEND_LAST'),
@@ -118,18 +128,47 @@ _bth_opcodes = dict([
     opcode('RD', 'ATOMIC_ACKNOWLEDGE'),
     opcode('RD', 'COMPARE_SWAP'),
     opcode('RD', 'FETCH_ADD'),
-
-    opcode('UD', 'SEND_ONLY'),
-    opcode('UD', 'SEND_ONLY_WITH_IMMEDIATE'),
-
-    (CNP_OPCODE, 'CNP'),
 ])
 
+_bth_opcodes_UD = dict([
+    opcode('UD', 'SEND_ONLY'),
+    opcode('UD', 'SEND_ONLY_WITH_IMMEDIATE'),
+])
+
+_bth_opcodes_XRC = dict([
+    opcode('XRC', 'SEND_FIRST'),
+    opcode('XRC', 'SEND_MIDDLE'),
+    opcode('XRC', 'SEND_LAST'),
+    opcode('XRC', 'SEND_LAST_WITH_IMMEDIATE'),
+    opcode('XRC', 'SEND_ONLY'),
+    opcode('XRC', 'SEND_ONLY_WITH_IMMEDIATE'),
+    opcode('XRC', 'RDMA_WRITE_FIRST'),
+    opcode('XRC', 'RDMA_WRITE_MIDDLE'),
+    opcode('XRC', 'RDMA_WRITE_LAST'),
+    opcode('XRC', 'RDMA_WRITE_LAST_WITH_IMMEDIATE'),
+    opcode('XRC', 'RDMA_WRITE_ONLY'),
+    opcode('XRC', 'RDMA_WRITE_ONLY_WITH_IMMEDIATE'),
+    opcode('XRC', 'RDMA_READ_REQUEST'),
+    opcode('XRC', 'RDMA_READ_RESPONSE_FIRST'),
+    opcode('XRC', 'RDMA_READ_RESPONSE_MIDDLE'),
+    opcode('XRC', 'RDMA_READ_RESPONSE_LAST'),
+    opcode('XRC', 'RDMA_READ_RESPONSE_ONLY'),
+    opcode('XRC', 'ACKNOWLEDGE'),
+    opcode('XRC', 'ATOMIC_ACKNOWLEDGE'),
+    opcode('XRC', 'COMPARE_SWAP'),
+    opcode('XRC', 'FETCH_ADD'),
+    opcode('XRC', 'SEND_LAST_WITH_INVALIDATE'),
+    opcode('XRC', 'SEND_ONLY_WITH_INVALIDATE'),
+])
+
+_bth_opcodes_CNP = dict([
+    (CNP_OPCODE, 'CNP'),
+])
 
 class BTH(Packet):
     name = "BTH"
     fields_desc = [
-        ByteEnumField("opcode", 0, _bth_opcodes),
+        ByteEnumField("opcode", 0, _bth_opcodes_RC),
         BitField("solicited", 0, 1),
         BitField("migreq", 0, 1),
         BitField("padcount", 0, 2),
@@ -219,7 +258,7 @@ class GRH(Packet):
         XBitField("dgid", 0, 128),
     ]
 
-
+# ACK Extended Transport Header (AETH) - 4 Bytes
 class AETH(Packet):
     name = "AETH"
     fields_desc = [
@@ -227,11 +266,118 @@ class AETH(Packet):
         XBitField("msn", 0, 24),
     ]
 
+# Reliable Datagram Extended Transport Header (RDETH) - 4 Bytes
+class RDETH(Packet):
+    name = "RDETH"
+    fields_desc = [
+        XByteField("reserved", 0),
+        XBitField("ee_context", 0, 24),
+    ]
+
+# Datagram Extended Transport Header (DETH) - 8 Bytes
+class DETH(Packet):
+    name = "DETH"
+    fields_desc = [
+        XBitField("q_key", 0, 32),
+        XByteField("reserved", 0),
+        XBitField("src_qp", 0, 24),
+    ]
+
+# RDMA Extended Transport Header (RETH) - 16 Bytes
+class RETH(Packet):
+    name = "RETH"
+    fields_desc = [
+        XBitField("virt_addr_63_to_32", 0, 32),
+        XBitField("virt_addr_31_to_0", 0, 32),
+        XBitField("r_key", 0, 32),
+        XBitField("dma_len", 0, 32),
+    ]
+
+# Atomic Extended Transport Header (AtomicETH) - 28 bytes
+class AtomicETH(Packet):
+    name = "AtomicETH"
+    fields_desc = [
+        XBitField("virt_addr_63_to_32", 0, 32),
+        XBitField("virt_addr_31_to_0", 0, 32),
+        XBitField("r_key", 0, 32),
+        XBitField("swap_or_add_data_63_to_32", 0, 32),
+        XBitField("swap_or_add_data_31_to_0", 0, 32),
+        XBitField("comp_data_63_to_32", 0, 32),
+        XBitField("comp_data_31_to_0", 0, 32),
+    ]
+
+# Atomic Acknowledge Extended Transport Header (AtomicAETH) - 8 Bytes
+class AtomicAETH(Packet):
+    name = "AtomicAETH"
+    fields_desc = [
+        XBitField("orig_remote_data_63_to_32", 0, 32),
+        XBitField("orig_remote_data_31_to_0", 0, 32),
+    ]
+
+# Immediate Extended Transport Header (ImmETH) - 4 Bytes
+class ImmETH(Packet):
+    name = "ImmETH"
+    fields_desc = [
+        XBitField("imm_data", 0, 32),
+    ]
+
+# Invalidate Extended Transport Header (IETH) - 4 Bytes
+class IETH(Packet):
+    name = "IETH"
+    fields_desc = [
+        XBitField("r_key", 0, 32),
+    ]
+
+# XRC Extended Transport Header (XRCETH)
+class XRCETH(Packet):
+    name = "XRCETH"
+    fields_desc = [
+        XByteField("reserved", 0),
+        XBitField("xrc_srq", 0, 24),
+    ]
 
 bind_layers(BTH, CNPPadding, opcode=CNP_OPCODE)
 
-bind_layers(Ether, GRH, type=0x8915)
+bind_layers(Ether, GRH, type=0x8915) # RoCE
 bind_layers(GRH, BTH)
 bind_layers(BTH, AETH, opcode=opcode('RC', 'ACKNOWLEDGE')[0])
 bind_layers(BTH, AETH, opcode=opcode('RD', 'ACKNOWLEDGE')[0])
-bind_layers(UDP, BTH, dport=4791)
+bind_layers(UDP, BTH, dport=4791) # RoCEv2 packet format
+
+"""
+_transports = {
+    0b000: 'RC',
+    0b001: 'UC',
+    0b010: 'RD',
+    0b011: 'UD',
+    0b100: 'CNP',
+    0b101: 'XRC',
+}
+
+_ops = {
+    0b00000: 'SEND_FIRST',
+    0b00001: 'SEND_MIDDLE',
+    0b00010: 'SEND_LAST',
+    0b00011: 'SEND_LAST_WITH_IMMEDIATE',
+    0b00100: 'SEND_ONLY',
+    0b00101: 'SEND_ONLY_WITH_IMMEDIATE',
+    0b00110: 'RDMA_WRITE_FIRST',
+    0b00111: 'RDMA_WRITE_MIDDLE',
+    0b01000: 'RDMA_WRITE_LAST',
+    0b01001: 'RDMA_WRITE_LAST_WITH_IMMEDIATE',
+    0b01010: 'RDMA_WRITE_ONLY',
+    0b01011: 'RDMA_WRITE_ONLY_WITH_IMMEDIATE',
+    0b01100: 'RDMA_READ_REQUEST',
+    0b01101: 'RDMA_READ_RESPONSE_FIRST',
+    0b01110: 'RDMA_READ_RESPONSE_MIDDLE',
+    0b01111: 'RDMA_READ_RESPONSE_LAST',
+    0b10000: 'RDMA_READ_RESPONSE_ONLY',
+    0b10001: 'ACKNOWLEDGE',
+    0b10010: 'ATOMIC_ACKNOWLEDGE',
+    0b10011: 'COMPARE_SWAP',
+    0b10100: 'FETCH_ADD',
+    0b10101: 'RESYNC',
+    0b10110: 'SEND_LAST_WITH_INVALIDATE',
+    0b10111: 'SEND_ONLY_WITH_INVALIDATE',
+}
+"""
